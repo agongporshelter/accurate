@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import io
-import re
 
 st.set_page_config(page_title="Consolidator Invoice", layout="wide")
 st.title("📊 Aplikasi Penggabung & Pembersih Data Invoice")
@@ -77,16 +76,10 @@ if uploaded_files:
         # Tampilkan data
         st.dataframe(final_df, use_container_width=True)
         
-        # Konversi ke Excel untuk diunduh
+        # Konversi ke Excel untuk diunduh (Tanpa auto-width untuk menghindari error Pandas)
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             final_df.to_excel(writer, index=False, sheet_name='Data_Gabungan')
-            
-            # Auto-adjust column widths
-            worksheet = writer.sheets['Data_Gabungan']
-            for idx, col in enumerate(final_df.columns):
-                max_len = max(final_df[col].astype(str).map(len).max(), len(col)) + 2
-                worksheet.column_dimensions[worksheet.cell(row=1, column=idx+1).column_letter].width = min(max_len, 30)
                 
         output.seek(0)
         
