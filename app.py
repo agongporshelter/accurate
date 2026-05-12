@@ -10,6 +10,7 @@ uploaded_files = st.file_uploader("Pilih file Excel (.xlsx)", type=['xlsx'], acc
 
 # Daftar kolom yang harus di-forward fill jika kosong (merged cells)
 fill_cols = ['Cabang', 'Pelanggan', 'Nama Proyek Utama', 'Tahun Join', 'Sales', 'Mulai PKS', 'Selesai PKS', 'Layanan']
+valid_codes = ['SN', 'SNI', 'RCI', 'ION', 'GSU', 'SIG'] # Daftar kode PT yang valid
 
 if uploaded_files:
     df_list = []
@@ -17,41 +18,57 @@ if uploaded_files:
     
     for i, file in enumerate(uploaded_files):
         try:
-            # Membaca excel, header ada di baris ke-3 (index 2)
-            df = pd.read_excel(file, header=2)
+            # 1. Baca file mentah (10 baris pertama) untuk mencari header dan kode PT
+            df_raw = pd.read_excel(file, header=None, nrows=10)
             
-            # 1. Deteksi Otomatis Kode PT dari Header (Kolom yang berisi SN, RCI, GSU, SIG, dll)
-            kode_pt = ""
-            entity_col_name = None
-            for col in df.columns:
-                # Cek jika nama kolom adalah huruf kapital semua dan pendek (seperti SN, SIG, RCI)
-                if isinstance(col, str) and col.isupper() and len(col) <= 5 and col != 'HEAD':
-                    kode_pt = col
-                    entity_col_name = col
+            # Cari baris header (yang mengandung kata 'Cabang')
+            header_row = None
+            for idx, row in df_raw.iterrows():
+                if row.astype(str).str.contains('Cabang').any():
+                    header_row = idx
                     break
+            
+            if header_row is None:
+                st.warning(f"Tidak dapat menemukan baris header 'Cabang' di file {file.name}. File dilewati.")
+                continue
+                
+            # Cari Kode PT (SN, RCI, dll) di baris-baris sebelum header
+            kode_pt = ""
+            for idx, row in df_raw.iterrows():
+                if idx < header_row:
+                    for val in row:
+                        val_str = str(val).strip().upper()
+                        if val_str in valid_codes:
+                            kode_pt = val_str
+                            break
+                if kode_pt:
+                    break
+            
+            if not kode_pt:
+                kode_pt = "UNKNOWN" # Jika tidak ketemu, akan ditulis UNKNOWN
+
+            # 2. Baca ulang Excel menggunakan baris header yang sudah ditemukan
+            df = pd.read_excel(file, header=header_row)
             
             # Buat kolom baru Kode_PT di posisi paling kiri
             df.insert(0, 'Kode_PT', kode_pt)
             
-            # 2. Hapus kolom yang tidak diperlukan (Unnamed, bintang *, HEAD, dan kolom kode entitas asli)
+            # 3. Hapus kolom yang tidak diperlukan (Unnamed, bintang *, HEAD, dll)
             cols_to_drop = [col for col in df.columns if 'Unnamed' in str(col) or str(col).strip() == '*' or str(col).strip() == 'HEAD']
-            if entity_col_name:
-                cols_to_drop.append(entity_col_name) # Hapus kolom asli (misal 'SIG'), karena sudah diganti 'Kode_PT'
-                
             df = df.drop(columns=cols_to_drop, errors='ignore')
             
-            # 3. Hapus baris kosong
+            # 4. Hapus baris kosong
             df = df.dropna(how='all')
             
-            # 4. Isi sel kosong (Merged cells) ke bawah (forward fill)
+            # 5. Isi sel kosong (Merged cells) ke bawah (forward fill)
             existing_fill_cols = [col for col in fill_cols if col in df.columns]
             df[existing_fill_cols] = df[existing_fill_cols].ffill()
             
-            # 5. Hapus baris Total Cabang
+            # 6. Hapus baris Total Cabang
             if 'Cabang' in df.columns:
                 df = df[~df['Cabang'].astype(str).str.contains('Total Cabang', na=False)]
                 
-            # 6. Tambahkan kolom sumber file (opsional, untuk traceability)
+            # 7. Tambahkan kolom sumber file
             df['Sumber_File'] = file.name
             
             df_list.append(df)
@@ -65,18 +82,12 @@ if uploaded_files:
         # Gabungkan semua dataframe
         final_df = pd.concat(df_list, ignore_index=True)
         
-        # Pastikan Kode_PT ada di paling depan
-        cols = list(final_df.columns)
-        if 'Kode_PT' in cols:
-            cols.insert(0, cols.pop(cols.index('Kode_PT')))
-            final_df = final_df[cols]
-            
         st.success(f"✅ Berhasil memproses {len(uploaded_files)} file. Total {len(final_df)} baris data siap analisis.")
         
         # Tampilkan data
         st.dataframe(final_df, use_container_width=True)
         
-        # Konversi ke Excel untuk diunduh (Tanpa auto-width untuk menghindari error Pandas)
+        # Konversi ke Excel untuk diunduh
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             final_df.to_excel(writer, index=False, sheet_name='Data_Gabungan')
